@@ -1,63 +1,77 @@
-from flask import Flask, request, jsonify, send_file
-import nest_asyncio
-import asyncio
-from pyppeteer import launch
-import io
+from flask import Flask, request, send_file
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+from docx import Document
+from docx.shared import Inches
+import os
+import imghdr
+import tempfile
 
-nest_asyncio.apply()
 app = Flask(__name__)
 
-@app.route('/extract-text', methods=['POST'])
-def extract_text():
-    data = request.json
-    url = data.get('url')
-    selector = data.get('selector')
-
-    if not url or not selector:
-        return jsonify({'error': 'Missing "url" or "selector".'}), 400
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    result = loop.run_until_complete(get_text(url, selector))
-    return jsonify(result)
-
-@app.route('/screenshot', methods=['POST'])
-def screenshot():
-    data = request.json
+@app.route('/generate-docx', methods=['POST'])
+def generate_docx():
+    data = request.get_json()
     url = data.get('url')
 
-    if not url:
-        return jsonify({'error': 'Missing "url".'}), 400
+    if not url or not url.startswith('http'):
+        return {'error': 'Invalid URL'}, 400
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    image_bytes = loop.run_until_complete(take_screenshot(url))
+    temp_dir = tempfile.mkdtemp()
+    docx_path = os.path.join(temp_dir, 'output.docx')
+    image_dir = os.path.join(temp_dir, 'images')
+    os.makedirs(image_dir, exist_ok=True)
 
-    return send_file(
-        io.BytesIO(image_bytes),
-        mimetype='image/png',
-        as_attachment=False,
-        download_name='screenshot.png'
-    )
 
-async def get_text(url, selector):
-    browser = await launch(headless=True, args=['--no-sandbox'])
-    page = await browser.newPage()
-    await page.goto(url, {'waitUntil': 'networkidle2'})
     try:
-        content = await page.querySelectorEval(selector, '(el) => el.innerText')
-    except Exception:
-        content = f'No element found for selector: {selector}'
-    await browser.close()
-    return {'url': url, 'selector': selector, 'extractedText': content}
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, 'html.parser')
 
-async def take_screenshot(url):
-    browser = await launch(headless=True, args=['--no-sandbox'])
-    page = await browser.newPage()
-    await page.goto(url, {'waitUntil': 'networkidle2'})
-    image = await page.screenshot({'fullPage': True})
-    await browser.close()
-    return image
+        text_content = soup.get_text(separator='\n', strip=True)
+
+        images = []
+        for idx, img in enumerate(soup.find_all('img'), 1):
+            src = img.get('src')
+            if src:
+                full_url = urljoin(url, src)
+                try:
+                    img_data = requests.get(full_url, timeout=10).content
+                    img_file = os.path.join(image_dir, f'image_{idx}')
+                    with open(img_file, 'wb') as f:
+                        f.write(img_data)
+
+                    ext = imghdr.what(img_file)
+                    if ext in ['jpeg', 'png', 'bmp', 'gif']:
+                        valid_file = img_file + f'.{ext}'
+                        os.rename(img_file, valid_file)
+                        images.append(valid_file)
+                    else:
+                        os.remove(img_file)
+                except:
+                    continue
+    except Exception as e:
+        return {'error': f'Failed to fetch page: {str(e)}'}, 500
+
+    doc = Document()
+    doc.add_heading('Web Page Content', 0)
+    doc.add_paragraph(text_content)
+
+    doc.add_page_break()
+    doc.add_heading('Images', level=1)
+    doc.add_paragraph(f'Page URL: {url}')
+
+    for img in images:
+        try:
+            doc.add_picture(img, width=Inches(5))
+        except:
+            continue
+
+    doc.save(docx_path)
+
+    return send_file(docx_path, as_attachment=True, download_name='page_output.docx')
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
