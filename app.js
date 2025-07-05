@@ -8,7 +8,6 @@ const PORT = 3000;
 
 app.use(express.json());
 
-// POST /generate-pdf { "url": "https://example.com" }
 app.post('/generate-pdf', async (req, res) => {
   const { url } = req.body;
 
@@ -35,11 +34,9 @@ app.post('/generate-pdf', async (req, res) => {
 
     await browser.close();
 
-    // Set headers to prompt download
-    res.download(filePath, 'download.pdf', (err) => {
+      res.download(filePath, 'download.pdf', (err) => {
       if (err) console.error('Error sending PDF:', err);
-      fs.unlinkSync(filePath);  // Clean up temp file
-    });
+      fs.unlinkSync(filePath);});
 
   } catch (error) {
     console.error('Error:', error);
