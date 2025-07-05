@@ -5,6 +5,7 @@ const { Readable } = require('stream');
 
 const app = express();
 app.use(bodyParser.json({ limit: '10mb' }));
+app.use(express.json());
 
 app.post('/convert', (req, res) => {
     const htmlContent = req.body.html;
