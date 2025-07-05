@@ -1,27 +1,52 @@
 const express = require('express');
-const bodyParser = require('body-parser');
-const wkhtmltopdf = require('wkhtmltopdf');
-const { Readable } = require('stream');
+const puppeteer = require('puppeteer');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
-app.use(bodyParser.json({ limit: '10mb' }));
+const PORT = 3000;
+
 app.use(express.json());
 
-app.post('/convert', (req, res) => {
-    const htmlContent = req.body.html;
+// POST /generate-pdf { "url": "https://example.com" }
+app.post('/generate-pdf', async (req, res) => {
+  const { url } = req.body;
 
-    if (!htmlContent) {
-        return res.status(400).json({ error: 'No HTML content provided' });
-    }
+  if (!url || !url.startsWith('http')) {
+    return res.status(400).send('Invalid or missing URL.');
+  }
 
-    const htmlStream = new Readable();
-    htmlStream.push(htmlContent);
-    htmlStream.push(null);
+  try {
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
 
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'attachment; filename=output.pdf');
+    const page = await browser.newPage();
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 0 });
 
-    wkhtmltopdf(htmlStream, { pageSize: 'A4' }).pipe(res);
+    const filePath = path.join(__dirname, 'download.pdf');
+    await page.pdf({
+      path: filePath,
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '20mm', bottom: '20mm', left: '15mm', right: '15mm' },
+    });
+
+    await browser.close();
+
+    // Set headers to prompt download
+    res.download(filePath, 'download.pdf', (err) => {
+      if (err) console.error('Error sending PDF:', err);
+      fs.unlinkSync(filePath);  // Clean up temp file
+    });
+
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).send('Failed to generate PDF.');
+  }
 });
 
-app.listen(3000, () => console.log('✅ No-browser PDF API running on http://localhost:3000'));
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});
